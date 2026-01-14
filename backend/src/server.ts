@@ -43,10 +43,24 @@ wss.on('connection', async (ws: WebSocket) => {
 
   // Skip authentication - create a dummy user for development
   const dummyUserId = `guest-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-  authenticatedConnections.set(ws, dummyUserId);
-  await messageHandler.registerUser(dummyUserId, ws);
 
-  console.log(`Guest user ${dummyUserId} connected (no auth required)`);
+  try {
+    // Create user in database first
+    const dbUser = await userService.createOrUpdateUser({
+      id: dummyUserId,
+      displayName: `Guest_${dummyUserId.substring(6, 14)}`,
+      isAnonymous: true
+    });
+
+    authenticatedConnections.set(ws, dummyUserId);
+    await messageHandler.registerUser(dummyUserId, ws);
+
+    console.log(`Guest user ${dummyUserId} created in database and connected (no auth required)`);
+  } catch (error) {
+    console.error('Failed to create guest user in database:', error);
+    ws.close(1011, 'Database error');
+    return;
+  }
 
   // Set up ping/pong for connection health
   const pingInterval = setInterval(() => {
