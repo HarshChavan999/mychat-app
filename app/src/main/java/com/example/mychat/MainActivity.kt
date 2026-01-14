@@ -66,18 +66,32 @@ fun ChatNavigation(
 
     val chatMessages by chatViewModel.chatMessages.collectAsState()
     val connectionState by chatViewModel.connectionState.collectAsState()
+    val isLoadingHistory by chatViewModel.isLoadingHistory.collectAsState()
+    val hasMoreHistory by chatViewModel.hasMoreHistory.collectAsState()
+    val historyError by chatViewModel.historyError.collectAsState()
 
     if (showChat && selectedUser != null) {
         val chatUser = selectedUser
+
+        // Initialize chat history when entering chat
+        LaunchedEffect(chatUser) {
+            chatViewModel.initializeChatHistory()
+        }
+
         ChatScreen(
             currentUser = currentUser,
             chatUser = chatUser,
             messages = chatMessages,
             connectionState = connectionState,
+            isLoadingHistory = isLoadingHistory,
+            hasMoreHistory = hasMoreHistory,
+            historyError = historyError,
             onSendMessage = { content ->
                 chatViewModel.sendMessage(chatUser!!.id, content)
             },
-            onBack = { showChat = false }
+            onBack = { showChat = false },
+            onLoadMoreHistory = { chatViewModel.loadMoreHistory() },
+            onClearHistoryError = { chatViewModel.clearHistoryError() }
         )
     } else {
         // Simple user selection screen for demo

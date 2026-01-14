@@ -205,4 +205,21 @@ class ChatRepository(
             _messageQueue.value = emptyList()
         }
     }
+
+    // History message handling
+    fun addHistoryMessages(historyMessages: List<Message>) {
+        val currentMessages = _messages.value.toMutableList()
+
+        // Filter out any history messages that are already in the list (by ID)
+        val existingMessageIds = currentMessages.map { it.id }.toSet()
+        val newHistoryMessages = historyMessages.filter { it.id !in existingMessageIds }
+
+        // Add history messages to the beginning (they are older messages)
+        currentMessages.addAll(0, newHistoryMessages)
+
+        // Sort messages by timestamp to ensure proper ordering
+        currentMessages.sortBy { it.timestamp }
+
+        _messages.value = currentMessages
+    }
 }

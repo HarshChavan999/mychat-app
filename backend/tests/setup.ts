@@ -10,26 +10,12 @@ declare global {
   };
 }
 
-// Mock Firebase Admin SDK
-const mockVerifyIdToken = jest.fn() as jest.MockedFunction<any>;
-const mockInitializeApp = jest.fn() as jest.MockedFunction<any>;
-
-jest.mock('firebase-admin', () => ({
-  initializeApp: mockInitializeApp,
-  auth: jest.fn(() => ({
-    verifyIdToken: mockVerifyIdToken,
-  })),
-  credential: {
-    applicationDefault: jest.fn(),
-  },
-}));
-
-// Export mocks for use in tests
-export { mockVerifyIdToken, mockInitializeApp };
-
-// Mock environment variables
+// Mock environment variables for test mode
 process.env.NODE_ENV = 'test';
 process.env.FIREBASE_PROJECT_ID = 'test-project';
+
+// Firebase Admin SDK is handled in auth.ts for test mode
+// No additional mocking needed
 
 // Global test utilities
 global.testUtils = {

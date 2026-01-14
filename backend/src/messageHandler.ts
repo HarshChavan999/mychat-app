@@ -1,21 +1,47 @@
 import { v4 as uuidv4 } from 'uuid';
 import { WebSocket } from 'ws';
-import { WebSocketMessage, MessagePayload, AckPayload, Message } from './types';
+import { WebSocketMessage, MessagePayload, AckPayload, Message, HistoryRequestPayload, HistoryResponsePayload } from './types';
+import { messageService } from './messageService';
+import { userService } from './userService';
 
 export class MessageHandler {
   private onlineUsers: Map<string, WebSocket> = new Map();
-  private pendingMessages: Map<string, Message> = new Map();
+  private pendingMessages: Map<string, Message> = new Map(); // Keep for backward compatibility, but also store in DB
 
   // Register a user as online
-  registerUser(userId: string, ws: WebSocket): void {
+  async registerUser(userId: string, ws: WebSocket): Promise<boolean> {
+    // If user was already connected, close the old connection
+    const existingWs = this.onlineUsers.get(userId);
+    if (existingWs && existingWs !== ws) {
+      existingWs.close();
+    }
     this.onlineUsers.set(userId, ws);
+
+    // Update user status in database
+    await userService.updateUserOnlineStatus(userId, true);
+
     console.log(`User ${userId} connected. Online users: ${this.onlineUsers.size}`);
+
+    // Deliver any offline messages
+    await this.deliverOfflineMessages(userId);
+
+    return true;
   }
 
   // Unregister a user when they disconnect
-  unregisterUser(userId: string): void {
-    this.onlineUsers.delete(userId);
-    console.log(`User ${userId} disconnected. Online users: ${this.onlineUsers.size}`);
+  async unregisterUser(userId: string): Promise<boolean> {
+    const existed = this.onlineUsers.delete(userId);
+    if (existed) {
+      console.log(`User ${userId} disconnected. Online users: ${this.onlineUsers.size}`);
+
+      // Update user status in database to offline
+      try {
+        await userService.updateUserOnlineStatus(userId, false);
+      } catch (error) {
+        console.error(`Error updating offline status for user ${userId}:`, error);
+      }
+    }
+    return existed;
   }
 
   // Check if a user is online
@@ -24,68 +50,75 @@ export class MessageHandler {
   }
 
   // Handle incoming MESSAGE type
-  async handleMessage(message: WebSocketMessage, fromUserId: string): Promise<void> {
+  async handleMessage(message: WebSocketMessage, fromUserId: string): Promise<boolean> {
     const payload = message.payload as MessagePayload;
 
     if (!payload || !payload.to || !payload.content) {
       console.error('Invalid MESSAGE payload');
-      return;
+      return false;
     }
 
-    // Create message object
-    const messageObj: Message = {
-      id: message.id || uuidv4(),
-      from: fromUserId,
-      to: payload.to,
-      content: payload.content,
-      timestamp: message.timestamp || Date.now(),
-      status: 'SENT'
-    };
+    const messageId = message.id || uuidv4();
+    const timestamp = message.timestamp || Date.now();
 
     // LOG MESSAGE TO PC CONSOLE
-    console.log(`📱 MESSAGE RECEIVED: [${new Date(messageObj.timestamp).toLocaleString()}] ${fromUserId} -> ${payload.to}: "${payload.content}"`);
+    console.log(`📱 MESSAGE RECEIVED: [${new Date(timestamp).toLocaleString()}] ${fromUserId} -> ${payload.to}: "${payload.content}"`);
 
-    // Store message temporarily
-    this.pendingMessages.set(messageObj.id, messageObj);
+    try {
+      // Store message in database
+      await messageService.storeMessage({
+        id: messageId,
+        fromUserId,
+        toUserId: payload.to,
+        content: payload.content,
+        timestamp
+      });
 
-    // Try to deliver message
-    const delivered = await this.deliverMessage(messageObj);
+      // Update last seen for sender
+      await userService.updateLastSeen(fromUserId);
 
-    if (delivered) {
-      messageObj.status = 'DELIVERED';
-      this.pendingMessages.delete(messageObj.id);
-      console.log(`✅ Message delivered to ${payload.to}`);
-    } else {
-      // Special handling for demo user - echo the message back
-      if (payload.to === 'demo-user-123') {
-        console.log(`🎯 Demo user received message: "${payload.content}"`);
-        // Echo the message back to the sender
-        await this.echoMessageToSender(messageObj, fromUserId);
-        this.pendingMessages.delete(messageObj.id);
+      // Try to deliver message if recipient is online
+      const delivered = await this.deliverMessageToRecipient(messageId, fromUserId, payload.to, payload.content, timestamp);
+
+      if (delivered) {
+        // Mark message as delivered in database
+        await messageService.updateMessageStatus(messageId, 'DELIVERED');
+        console.log(`✅ Message delivered to ${payload.to}`);
       } else {
-        console.log(`📨 Message queued for offline user ${payload.to}`);
+        // Special handling for demo user - echo the message back
+        if (payload.to === 'demo-user-123') {
+          console.log(`🎯 Demo user received message: "${payload.content}"`);
+          await this.echoMessageToSender(messageId, fromUserId, payload.to, payload.content, timestamp);
+        } else {
+          console.log(`📨 Message stored for offline user ${payload.to}`);
+        }
       }
-    }
 
-    // Send ACK back to sender
-    const senderWs = this.onlineUsers.get(fromUserId);
-    if (senderWs) {
-      const ackMessage: WebSocketMessage = {
-        type: 'ACK',
-        payload: { messageId: messageObj.id },
-        timestamp: Date.now()
-      };
-      senderWs.send(JSON.stringify(ackMessage));
-      console.log(`📤 ACK sent to ${fromUserId} for message ${messageObj.id}`);
+      // Send ACK back to sender
+      const senderWs = this.onlineUsers.get(fromUserId);
+      if (senderWs) {
+        const ackMessage: WebSocketMessage = {
+          type: 'ACK',
+          payload: { messageId },
+          timestamp: Date.now()
+        };
+        senderWs.send(JSON.stringify(ackMessage));
+        console.log(`📤 ACK sent to ${fromUserId} for message ${messageId}`);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error handling message:', error);
+      return false;
     }
   }
 
-  // Deliver message to recipient
-  private async deliverMessage(message: Message): Promise<boolean> {
-    const recipientWs = this.onlineUsers.get(message.to);
+  // Deliver message to recipient (new method for database integration)
+  private async deliverMessageToRecipient(messageId: string, fromUserId: string, toUserId: string, content: string, timestamp: number): Promise<boolean> {
+    const recipientWs = this.onlineUsers.get(toUserId);
 
     if (!recipientWs) {
-      console.log(`User ${message.to} is not online. Message queued.`);
+      console.log(`User ${toUserId} is not online. Message stored in database.`);
       return false;
     }
 
@@ -93,10 +126,10 @@ export class MessageHandler {
       const wsMessage: WebSocketMessage = {
         type: 'MESSAGE',
         payload: {
-          id: message.id,
-          from: message.from,
-          content: message.content,
-          timestamp: message.timestamp
+          id: messageId,
+          from: fromUserId,
+          content: content,
+          timestamp: timestamp
         },
         timestamp: Date.now()
       };
@@ -109,57 +142,132 @@ export class MessageHandler {
     }
   }
 
+  // Deliver message to recipient (legacy method for backward compatibility)
+  private async deliverMessage(message: Message): Promise<boolean> {
+    return this.deliverMessageToRecipient(message.id, message.from, message.to, message.content, message.timestamp);
+  }
+
   // Handle ACK from recipient
-  handleAck(message: WebSocketMessage, fromUserId: string): void {
+  async handleAck(message: WebSocketMessage, fromUserId: string): Promise<boolean> {
     const payload = message.payload as AckPayload;
 
     if (!payload || !payload.messageId) {
       console.error('Invalid ACK payload');
-      return;
+      return false;
     }
 
-    // Remove message from pending if it exists
-    const pendingMessage = this.pendingMessages.get(payload.messageId);
-    if (pendingMessage && pendingMessage.from === fromUserId) {
-      this.pendingMessages.delete(payload.messageId);
-      console.log(`Message ${payload.messageId} acknowledged by ${fromUserId}`);
+    try {
+      // Update message status in database to DELIVERED
+      const updatedMessage = await messageService.updateMessageStatus(payload.messageId, 'DELIVERED');
+
+      if (updatedMessage) {
+        // Update last seen for recipient
+        await userService.updateLastSeen(fromUserId);
+        console.log(`Message ${payload.messageId} acknowledged by ${fromUserId}`);
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('Error handling ACK:', error);
+      return false;
     }
   }
 
-  // Echo message back to sender (for demo user)
-  private async echoMessageToSender(originalMessage: Message, senderId: string): Promise<void> {
+  // Echo message back to sender (for demo user) - updated signature
+  private async echoMessageToSender(messageId: string, senderId: string, demoUserId: string, originalContent: string, timestamp: number): Promise<void> {
     const senderWs = this.onlineUsers.get(senderId);
     if (!senderWs) {
       console.log(`Cannot echo message: sender ${senderId} not connected`);
       return;
     }
 
-    // Create echo response
-    const echoMessage: Message = {
-      id: uuidv4(),
-      from: originalMessage.to, // From demo user
-      to: senderId,
-      content: `Echo: ${originalMessage.content}`, // Echo the original message
-      timestamp: Date.now(),
-      status: 'DELIVERED'
-    };
+    // Create echo response and store in database
+    const echoMessageId = uuidv4();
+    const echoContent = `Echo: ${originalContent}`;
 
     try {
+      // Store echo message in database
+      await messageService.storeMessage({
+        id: echoMessageId,
+        fromUserId: demoUserId,
+        toUserId: senderId,
+        content: echoContent,
+        timestamp: Date.now()
+      });
+
+      // Mark as delivered since we're sending it immediately
+      await messageService.updateMessageStatus(echoMessageId, 'DELIVERED');
+
+      // Send echo message to sender
       const wsMessage: WebSocketMessage = {
         type: 'MESSAGE',
         payload: {
-          id: echoMessage.id,
-          from: echoMessage.from,
-          content: echoMessage.content,
-          timestamp: echoMessage.timestamp
+          id: echoMessageId,
+          from: demoUserId,
+          content: echoContent,
+          timestamp: Date.now()
         },
         timestamp: Date.now()
       };
 
       senderWs.send(JSON.stringify(wsMessage));
-      console.log(`🔄 ECHO SENT: demo-user-123 -> ${senderId}: "${echoMessage.content}"`);
+      console.log(`🔄 ECHO SENT: ${demoUserId} -> ${senderId}: "${echoContent}"`);
     } catch (error) {
       console.error('Error sending echo message:', error);
+    }
+  }
+
+  // Handle HISTORY_REQUEST messages
+  async handleHistoryRequest(message: WebSocketMessage, fromUserId: string): Promise<boolean> {
+    const payload = message.payload as HistoryRequestPayload;
+
+    if (!payload || !payload.withUserId) {
+      console.error('Invalid HISTORY_REQUEST payload');
+      return false;
+    }
+
+    try {
+      const limit = payload.limit || 50;
+      const beforeTimestamp = payload.beforeTimestamp ? new Date(payload.beforeTimestamp) : undefined;
+
+      // Get conversation history from database
+      const messages = await messageService.getConversation(fromUserId, payload.withUserId, limit, beforeTimestamp);
+
+      // Check if there are more messages (simple check: if we got the limit, assume there are more)
+      const hasMore = messages.length === limit;
+
+      // Convert DbMessage[] to Message[] for response
+      const responseMessages: Message[] = messages.map(dbMsg => ({
+        id: dbMsg.id,
+        from: dbMsg.from_user_id,
+        to: dbMsg.to_user_id,
+        content: dbMsg.content,
+        timestamp: dbMsg.timestamp.getTime(),
+        status: dbMsg.status
+      }));
+
+      // Send history response back to user
+      const userWs = this.onlineUsers.get(fromUserId);
+      if (userWs) {
+        const historyResponse: WebSocketMessage = {
+          type: 'HISTORY_RESPONSE',
+          payload: {
+            withUserId: payload.withUserId,
+            messages: responseMessages,
+            hasMore
+          } as HistoryResponsePayload,
+          timestamp: Date.now()
+        };
+
+        userWs.send(JSON.stringify(historyResponse));
+        console.log(`📚 Sent ${responseMessages.length} messages from history to ${fromUserId} (conversation with ${payload.withUserId})`);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error handling history request:', error);
+      return false;
     }
   }
 
@@ -170,6 +278,49 @@ export class MessageHandler {
       timestamp: Date.now()
     };
     ws.send(JSON.stringify(pongMessage));
+  }
+
+  // Deliver offline messages to a user when they come online
+  private async deliverOfflineMessages(userId: string): Promise<void> {
+    try {
+      const offlineMessages = await messageService.getUndeliveredMessagesForUser(userId);
+
+      if (offlineMessages.length > 0) {
+        console.log(`📨 Delivering ${offlineMessages.length} offline messages to ${userId}`);
+
+        const userWs = this.onlineUsers.get(userId);
+        if (!userWs) {
+          console.log(`User ${userId} disconnected before offline messages could be delivered`);
+          return;
+        }
+
+        // Send each offline message
+        for (const message of offlineMessages) {
+          try {
+            const wsMessage: WebSocketMessage = {
+              type: 'MESSAGE',
+              payload: {
+                id: message.id,
+                from: message.from_user_id,
+                content: message.content,
+                timestamp: message.timestamp.getTime()
+              },
+              timestamp: Date.now()
+            };
+
+            userWs.send(JSON.stringify(wsMessage));
+
+            // Mark message as delivered
+            await messageService.updateMessageStatus(message.id, 'DELIVERED');
+            console.log(`✅ Delivered offline message ${message.id} to ${userId}`);
+          } catch (error) {
+            console.error(`Failed to deliver offline message ${message.id}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Error delivering offline messages to ${userId}:`, error);
+    }
   }
 
   // Get online users count (for monitoring)

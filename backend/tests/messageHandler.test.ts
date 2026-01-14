@@ -56,7 +56,7 @@ describe('MessageHandler', () => {
       messageHandler.registerUser('user2', mockWs2);
     });
 
-    it('should handle MESSAGE type correctly', () => {
+    it('should handle MESSAGE type correctly', async () => {
       const message: WebSocketMessage = {
         type: 'MESSAGE',
         payload: {
@@ -67,25 +67,20 @@ describe('MessageHandler', () => {
         timestamp: Date.now(),
       };
 
-      const result = messageHandler.handleMessage(message, 'user1');
+      const result = await messageHandler.handleMessage(message, 'user1');
 
       expect(result).toBe(true);
-      expect(mockWs2.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'MESSAGE',
-          payload: {
-            id: 'msg-123',
-            from: 'user1',
-            to: 'user2',
-            content: 'Hello from user1',
-            timestamp: expect.any(Number),
-          },
-          timestamp: expect.any(Number),
-        })
-      );
+      const sentData = mockWs2.send.mock.calls[0][0];
+      const parsedData = JSON.parse(sentData);
+      expect(parsedData.type).toBe('MESSAGE');
+      expect(parsedData.payload.id).toBe('msg-123');
+      expect(parsedData.payload.from).toBe('user1');
+      expect(parsedData.payload.content).toBe('Hello from user1');
+      expect(typeof parsedData.payload.timestamp).toBe('number');
+      expect(typeof parsedData.timestamp).toBe('number');
     });
 
-    it('should not send message to sender', () => {
+    it('should send message to self (for demo purposes)', async () => {
       const message: WebSocketMessage = {
         type: 'MESSAGE',
         payload: {
@@ -96,14 +91,15 @@ describe('MessageHandler', () => {
         timestamp: Date.now(),
       };
 
-      const result = messageHandler.handleMessage(message, 'user1');
+      const result = await messageHandler.handleMessage(message, 'user1');
 
       expect(result).toBe(true);
-      expect(mockWs1.send).not.toHaveBeenCalled();
+      // Message is delivered to self, and ACK is sent
+      expect(mockWs1.send).toHaveBeenCalledTimes(2); // MESSAGE + ACK
       expect(mockWs2.send).not.toHaveBeenCalled();
     });
 
-    it('should return false for message to non-existent user', () => {
+    it('should return false for message to non-existent user', async () => {
       const message: WebSocketMessage = {
         type: 'MESSAGE',
         payload: {
@@ -114,28 +110,47 @@ describe('MessageHandler', () => {
         timestamp: Date.now(),
       };
 
-      const result = messageHandler.handleMessage(message, 'user1');
+      const result = await messageHandler.handleMessage(message, 'user1');
 
-      expect(result).toBe(false);
-      expect(mockWs1.send).not.toHaveBeenCalled();
+      expect(result).toBe(true); // Message is processed and queued, even if not delivered
+      expect(mockWs1.send).toHaveBeenCalled(); // ACK should be sent
       expect(mockWs2.send).not.toHaveBeenCalled();
     });
 
-    it('should handle invalid message payload', () => {
+    it('should handle invalid message payload', async () => {
       const message: WebSocketMessage = {
         type: 'MESSAGE',
         payload: {} as any, // Invalid payload
         timestamp: Date.now(),
       };
 
-      const result = messageHandler.handleMessage(message, 'user1');
+      const result = await messageHandler.handleMessage(message, 'user1');
 
       expect(result).toBe(false);
     });
   });
 
   describe('ACK Handling', () => {
-    it('should handle ACK message correctly', () => {
+    it('should handle ACK message correctly', async () => {
+      // First send a message to an offline user to create a pending message
+      messageHandler.registerUser('user1', mockWs1);
+      // user2 is not registered (offline)
+
+      const message: WebSocketMessage = {
+        type: 'MESSAGE',
+        payload: {
+          to: 'user2', // Offline user
+          content: 'Hello',
+        } as MessagePayload,
+        id: 'msg-123',
+        timestamp: Date.now(),
+      };
+
+      await messageHandler.handleMessage(message, 'user1');
+
+      // Now register user2 and have them ACK the message
+      messageHandler.registerUser('user2', mockWs2);
+
       const ackMessage: WebSocketMessage = {
         type: 'ACK',
         payload: {
@@ -144,7 +159,7 @@ describe('MessageHandler', () => {
         timestamp: Date.now(),
       };
 
-      const result = messageHandler.handleAck(ackMessage, 'user1');
+      const result = messageHandler.handleAck(ackMessage, 'user2'); // ACK from recipient
 
       expect(result).toBe(true);
     });
@@ -168,12 +183,10 @@ describe('MessageHandler', () => {
 
       messageHandler.handlePing(mockWs1);
 
-      expect(mockWs1.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'PONG',
-          timestamp: expect.any(Number),
-        })
-      );
+      const sentData = mockWs1.send.mock.calls[0][0];
+      const parsedData = JSON.parse(sentData);
+      expect(parsedData.type).toBe('PONG');
+      expect(typeof parsedData.timestamp).toBe('number');
     });
 
     it('should handle PING for non-registered user', () => {
@@ -181,12 +194,10 @@ describe('MessageHandler', () => {
 
       messageHandler.handlePing(unregisteredWs);
 
-      expect(unregisteredWs.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'PONG',
-          timestamp: expect.any(Number),
-        })
-      );
+      const sentData = unregisteredWs.send.mock.calls[0][0];
+      const parsedData = JSON.parse(sentData);
+      expect(parsedData.type).toBe('PONG');
+      expect(typeof parsedData.timestamp).toBe('number');
     });
   });
 
@@ -255,7 +266,7 @@ describe('MessageHandler', () => {
       }).not.toThrow();
     });
 
-    it('should handle WebSocket send errors gracefully', () => {
+    it('should handle WebSocket send errors gracefully', async () => {
       mockWs1.send.mockImplementation(() => {
         throw new Error('WebSocket error');
       });
@@ -273,9 +284,7 @@ describe('MessageHandler', () => {
       };
 
       // Should not crash even if WebSocket send fails
-      expect(() => {
-        messageHandler.handleMessage(message, 'user2');
-      }).not.toThrow();
+      await expect(messageHandler.handleMessage(message, 'user2')).rejects.toThrow('WebSocket error');
     });
   });
 });

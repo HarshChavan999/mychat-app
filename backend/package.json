@@ -8,12 +8,20 @@
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "test": "jest",
+    "test:coverage": "jest --coverage",
     "lint": "eslint src/**/*.ts",
-    "format": "prettier --write src/**/*.ts"
+    "format": "prettier --write src/**/*.ts",
+    "docker:build": "docker build -t chat-backend .",
+    "docker:run": "docker run -p 8080:8080 chat-backend",
+    "docker:push": "docker push gcr.io/$GCP_PROJECT/chat-backend",
+    "deploy:staging": "gcloud run deploy chat-backend-staging --image gcr.io/$GCP_PROJECT/chat-backend --platform managed --region us-central1 --allow-unauthenticated --port 8080",
+    "deploy:prod": "gcloud run deploy chat-backend --image gcr.io/$GCP_PROJECT/chat-backend --platform managed --region us-central1 --allow-unauthenticated --port 8080 --min-instances 1 --max-instances 10"
   },
   "dependencies": {
+    "@types/pg": "^8.16.0",
     "dotenv": "^16.3.1",
     "firebase-admin": "^12.0.0",
+    "pg": "^8.16.3",
     "uuid": "^9.0.1",
     "ws": "^8.16.0"
   },

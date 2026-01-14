@@ -4,12 +4,26 @@ import * as dotenv from 'dotenv';
 import { initializeFirebase } from './auth';
 import { MessageHandler } from './messageHandler';
 import { WebSocketMessage } from './types';
+import { databaseService } from './database';
+import { userService } from './userService';
+import { messageService } from './messageService';
 
 // Load environment variables
 dotenv.config();
 
 // Initialize Firebase
 initializeFirebase();
+
+// Initialize database
+(async () => {
+  try {
+    await databaseService.initialize();
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize database:', error);
+    process.exit(1);
+  }
+})();
 
 const PORT = process.env.PORT || 8080;
 const server = http.createServer();
@@ -24,13 +38,13 @@ setInterval(() => {
   messageHandler.cleanupOldMessages();
 }, 60 * 60 * 1000);
 
-wss.on('connection', (ws: WebSocket) => {
+wss.on('connection', async (ws: WebSocket) => {
   console.log('New WebSocket connection established');
 
   // Skip authentication - create a dummy user for development
   const dummyUserId = `guest-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   authenticatedConnections.set(ws, dummyUserId);
-  messageHandler.registerUser(dummyUserId, ws);
+  await messageHandler.registerUser(dummyUserId, ws);
 
   console.log(`Guest user ${dummyUserId} connected (no auth required)`);
 
@@ -69,7 +83,11 @@ wss.on('connection', (ws: WebSocket) => {
           break;
 
         case 'ACK':
-          messageHandler.handleAck(message, userId);
+          await messageHandler.handleAck(message, userId);
+          break;
+
+        case 'HISTORY_REQUEST':
+          await messageHandler.handleHistoryRequest(message, userId);
           break;
 
         case 'PING':
@@ -86,7 +104,7 @@ wss.on('connection', (ws: WebSocket) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', async () => {
     console.log('WebSocket connection closed');
     clearInterval(pingInterval);
 
@@ -94,11 +112,11 @@ wss.on('connection', (ws: WebSocket) => {
     const userId = authenticatedConnections.get(ws);
     if (userId) {
       authenticatedConnections.delete(ws);
-      messageHandler.unregisterUser(userId);
+      await messageHandler.unregisterUser(userId);
     }
   });
 
-  ws.on('error', (error) => {
+  ws.on('error', async (error) => {
     console.error('WebSocket error:', error);
     clearInterval(pingInterval);
 
@@ -106,7 +124,7 @@ wss.on('connection', (ws: WebSocket) => {
     const userId = authenticatedConnections.get(ws);
     if (userId) {
       authenticatedConnections.delete(ws);
-      messageHandler.unregisterUser(userId);
+      await messageHandler.unregisterUser(userId);
     }
   });
 });
@@ -116,30 +134,60 @@ async function handleAuth(ws: WebSocket, message: WebSocketMessage) {
   const result = await auth.handleAuthMessage(message);
 
   if (result) {
-    // Check if user is already connected
-    const existingConnection = Array.from(authenticatedConnections.entries())
-      .find(([_, uid]) => uid === result.userId);
+    try {
+      // Create or update user in database
+      const dbUser = await userService.createOrUpdateUser({
+        id: result.userId,
+        email: result.user.email,
+        displayName: result.user.displayName,
+        isAnonymous: result.user.isAnonymous
+      });
 
-    if (existingConnection) {
-      // Close existing connection
-      existingConnection[0].close(1000, 'New connection established');
-      authenticatedConnections.delete(existingConnection[0]);
-      messageHandler.unregisterUser(result.userId);
+      // Check if user is already connected
+      const existingConnection = Array.from(authenticatedConnections.entries())
+        .find(([_, uid]) => uid === result.userId);
+
+      if (existingConnection) {
+        // Close existing connection
+        existingConnection[0].close(1000, 'New connection established');
+        authenticatedConnections.delete(existingConnection[0]);
+        await messageHandler.unregisterUser(result.userId);
+      }
+
+      // Register new connection
+      authenticatedConnections.set(ws, result.userId);
+      await messageHandler.registerUser(result.userId, ws);
+
+      // Send success response with database user info
+      const successMessage: WebSocketMessage = {
+        type: 'AUTH',
+        payload: {
+          success: true,
+          user: {
+            id: dbUser.id,
+            displayName: dbUser.display_name,
+            email: dbUser.email,
+            avatar_url: dbUser.avatar_url,
+            bio: dbUser.bio,
+            is_online: dbUser.is_online,
+            last_seen: dbUser.last_seen.toISOString()
+          }
+        },
+        timestamp: Date.now()
+      };
+      ws.send(JSON.stringify(successMessage));
+
+      console.log(`User ${result.userId} authenticated and stored in database successfully`);
+    } catch (error) {
+      console.error('Database error during authentication:', error);
+      const failureMessage: WebSocketMessage = {
+        type: 'AUTH',
+        payload: { success: false, error: 'Database error during authentication' },
+        timestamp: Date.now()
+      };
+      ws.send(JSON.stringify(failureMessage));
+      ws.close(1011, 'Database error');
     }
-
-    // Register new connection
-    authenticatedConnections.set(ws, result.userId);
-    messageHandler.registerUser(result.userId, ws);
-
-    // Send success response
-    const successMessage: WebSocketMessage = {
-      type: 'AUTH',
-      payload: { success: true, user: result.user },
-      timestamp: Date.now()
-    };
-    ws.send(JSON.stringify(successMessage));
-
-    console.log(`User ${result.userId} authenticated successfully`);
   } else {
     // Send failure response
     const failureMessage: WebSocketMessage = {
@@ -161,15 +209,38 @@ function sendError(ws: WebSocket, error: string) {
   ws.send(JSON.stringify(errorMessage));
 }
 
-// Health check endpoint
-server.on('request', (req, res) => {
+// Health check endpoints
+server.on('request', async (req, res) => {
   if (req.url === '/health') {
+    // Basic health check - always returns healthy
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'healthy',
-      onlineUsers: messageHandler.getOnlineUsersCount(),
+      uptime: process.uptime(),
       timestamp: new Date().toISOString()
     }));
+  } else if (req.url === '/ready') {
+    // Readiness check - verifies database and services are ready
+    try {
+      // Test database connection
+      await databaseService.query('SELECT 1');
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'ready',
+        onlineUsers: messageHandler.getOnlineUsersCount(),
+        database: 'connected',
+        timestamp: new Date().toISOString()
+      }));
+    } catch (error) {
+      console.error('Readiness check failed:', error);
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'not ready',
+        error: 'Database connection failed',
+        timestamp: new Date().toISOString()
+      }));
+    }
   } else {
     res.writeHead(404);
     res.end('Not Found');

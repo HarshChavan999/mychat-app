@@ -10,6 +10,12 @@ export function initializeFirebase() {
     return null;
   }
 
+  // In test mode, skip Firebase initialization
+  if (process.env.NODE_ENV === 'test') {
+    console.log('Test mode: Skipping Firebase initialization');
+    return null;
+  }
+
   if (!firebaseApp) {
     // Initialize Firebase Admin SDK
     // In production, load credentials from environment variables or service account file
@@ -30,6 +36,19 @@ export async function verifyFirebaseToken(token: string): Promise<admin.auth.Dec
       uid: `dev-user-${Date.now()}`,
       email: 'dev@example.com',
       name: 'Development User',
+      firebase: {
+        sign_in_provider: token.includes('anonymous') ? 'anonymous' : 'password'
+      }
+    } as any;
+  }
+
+  // In test mode, return a mock token
+  if (process.env.NODE_ENV === 'test') {
+    console.log('Test mode: Returning mock token');
+    return {
+      uid: `test-user-${Date.now()}`,
+      email: 'test@example.com',
+      name: 'Test User',
       firebase: {
         sign_in_provider: token.includes('anonymous') ? 'anonymous' : 'password'
       }

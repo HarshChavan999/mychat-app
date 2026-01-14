@@ -40,6 +40,9 @@ class WebSocketManager(
     private val _errorReceived = MutableSharedFlow<String>()
     val errorReceived: SharedFlow<String> = _errorReceived
 
+    private val _historyResponse = MutableSharedFlow<HistoryResponsePayload>()
+    val historyResponse: SharedFlow<HistoryResponsePayload> = _historyResponse
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Ping/Pong for connection health
@@ -124,6 +127,15 @@ class WebSocketManager(
         sendMessage(message)
     }
 
+    fun sendHistoryRequest(withUserId: String, limit: Int? = null, beforeTimestamp: Long? = null) {
+        val message = WebSocketMessage(
+            type = MessageType.HISTORY_REQUEST,
+            payload = HistoryRequestPayload(withUserId, limit, beforeTimestamp),
+            timestamp = System.currentTimeMillis()
+        )
+        sendMessage(message)
+    }
+
     private fun sendMessage(message: WebSocketMessage) {
         if (_connectionState.value != ConnectionState.CONNECTED) {
             Log.w(TAG, "Cannot send message: not connected")
@@ -180,6 +192,11 @@ class WebSocketManager(
                 MessageType.ERROR -> {
                     val error = message.payload.toString()
                     scope.launch { _errorReceived.emit(error) }
+                }
+                MessageType.HISTORY_RESPONSE -> {
+                    val historyResponse = gson.fromJson(gson.toJson(message.payload), HistoryResponsePayload::class.java)
+                    scope.launch { _historyResponse.emit(historyResponse) }
+                    Log.d(TAG, "History response received for conversation with ${historyResponse.withUserId}: ${historyResponse.messages.size} messages")
                 }
                 else -> {
                     Log.w(TAG, "Unknown message type: ${message.type}")

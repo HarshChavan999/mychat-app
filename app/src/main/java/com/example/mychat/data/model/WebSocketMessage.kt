@@ -13,7 +13,9 @@ enum class MessageType {
     ACK,
     PING,
     PONG,
-    ERROR
+    ERROR,
+    HISTORY_REQUEST,
+    HISTORY_RESPONSE
 }
 
 // Payload classes
@@ -41,4 +43,16 @@ data class MessageResponse(
     val from: String,
     val content: String,
     val timestamp: Long
+)
+
+data class HistoryRequestPayload(
+    val withUserId: String,
+    val limit: Int? = null,
+    val beforeTimestamp: Long? = null
+)
+
+data class HistoryResponsePayload(
+    val withUserId: String,
+    val messages: List<Message>,
+    val hasMore: Boolean
 )

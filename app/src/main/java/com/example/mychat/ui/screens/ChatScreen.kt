@@ -23,8 +23,13 @@ fun ChatScreen(
     chatUser: User?,
     messages: List<Message>,
     connectionState: WebSocketManager.ConnectionState,
+    isLoadingHistory: Boolean = false,
+    hasMoreHistory: Boolean = false,
+    historyError: String? = null,
     onSendMessage: (String) -> Unit,
     onBack: () -> Unit,
+    onLoadMoreHistory: (() -> Unit)? = null,
+    onClearHistoryError: (() -> Unit)? = null,
     onRefresh: (() -> Unit)? = null,
     onRetryConnection: (() -> Unit)? = null
 ) {
@@ -80,6 +85,46 @@ fun ChatScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // History loading indicator at the top
+                if (isLoadingHistory) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Loading history...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Load more history button
+                if (hasMoreHistory && !isLoadingHistory) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            TextButton(
+                                onClick = { onLoadMoreHistory?.invoke() }
+                            ) {
+                                Text("Load Older Messages")
+                            }
+                        }
+                    }
+                }
+
+                // Messages
                 items(messages) { message ->
                     val isFromCurrentUser = message.from == currentUser?.id
                     MessageBubble(
@@ -87,6 +132,65 @@ fun ChatScreen(
                         isFromCurrentUser = isFromCurrentUser,
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+
+                // Empty state when no messages and not loading
+                if (messages.isEmpty() && !isLoadingHistory) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 64.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "No messages yet",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "Start a conversation!",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // History error banner
+            historyError?.let { error ->
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Failed to load message history: $error",
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { onClearHistoryError?.invoke() }
+                        ) {
+                            Text(
+                                text = "Dismiss",
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
 
