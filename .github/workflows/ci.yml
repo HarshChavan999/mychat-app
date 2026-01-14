@@ -76,7 +76,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test-backend, test-android]
+    needs: []
     continue-on-error: true
 
     steps:
