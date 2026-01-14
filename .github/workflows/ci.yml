@@ -136,7 +136,7 @@ jobs:
         appId: "1:215828472999:android:aa953679adf35f55cf2782"
         serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
         groups: testers
-        file: app-release.apk
+        file: app-release-unsigned.apk
         releaseNotes: "Automated build from GitHub Actions - ${{ github.run_number }}"
 
   deploy-backend:
