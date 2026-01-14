@@ -12,7 +12,7 @@ import okhttp3.*
 import java.util.concurrent.TimeUnit
 
 class WebSocketManager(
-    private val serverUrl: String = "ws://192.168.0.100:3000", // Your computer's IP address
+    private val serverUrl: String = "wss://chat-backend-215828472999.us-central1.run.app", // Production Cloud Run URL
     private val networkConnectivityManager: NetworkConnectivityManager? = null
 ) {
     private val TAG = "WebSocketManager"
