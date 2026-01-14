@@ -104,6 +104,10 @@ jobs:
     - name: Make gradlew executable
       run: chmod +x ./gradlew
 
+    - name: Generate debug keystore
+      run: |
+        keytool -genkey -v -keystore app/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
     - name: Build Android APK
       run: ./gradlew assembleRelease
 
@@ -136,7 +140,7 @@ jobs:
         appId: "1:215828472999:android:aa953679adf35f55cf2782"
         serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
         groups: testers
-        file: app-release-unsigned.apk
+        file: app-release.apk
         releaseNotes: "Automated build from GitHub Actions - ${{ github.run_number }}"
 
   deploy-backend:
