@@ -125,7 +125,10 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: app-release
-        path: app/build/outputs/apk/release/
+        path: .
+
+    - name: List downloaded files
+      run: ls -la *.apk
 
     - name: Distribute to Firebase App Distribution
       uses: wzieba/Firebase-Distribution-Github-Action@v1
@@ -133,7 +136,7 @@ jobs:
         appId: "1:215828472999:android:aa953679adf35f55cf2782"
         serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
         groups: testers
-        file: app/build/outputs/apk/release/app-release.apk
+        file: app-release.apk
         releaseNotes: "Automated build from GitHub Actions - ${{ github.run_number }}"
 
   deploy-backend:
