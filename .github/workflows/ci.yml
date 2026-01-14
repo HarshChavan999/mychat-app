@@ -180,16 +180,26 @@ jobs:
 
     - name: Deploy to Cloud Run
       run: |
-        gcloud run deploy chat-backend \
-          --image=us-central1-docker.pkg.dev/startsmart-8789e/chat-app-repo/chat-backend:latest \
-          --platform=managed \
-          --region=us-central1 \
-          --allow-unauthenticated \
-          --port=8080 \
-          --memory=1Gi \
-          --cpu=1 \
-          --max-instances=10 \
-          --min-instances=1 \
-          --concurrency=80 \
-          --timeout=300 \
-          --set-env-vars="NODE_ENV=production,FIREBASE_PROJECT_ID=startsmart-8789e"
+        # Try to update existing service, if it fails, create new one
+        if gcloud run services describe chat-backend --region=us-central1 --format="value(status.url)" >/dev/null 2>&1; then
+          echo "Updating existing Cloud Run service..."
+          gcloud run deploy chat-backend \
+            --image=us-central1-docker.pkg.dev/startsmart-8789e/chat-app-repo/chat-backend:latest \
+            --region=us-central1 \
+            --update-env-vars="NODE_ENV=production,FIREBASE_PROJECT_ID=startsmart-8789e"
+        else
+          echo "Creating new Cloud Run service..."
+          gcloud run deploy chat-backend \
+            --image=us-central1-docker.pkg.dev/startsmart-8789e/chat-app-repo/chat-backend:latest \
+            --platform=managed \
+            --region=us-central1 \
+            --allow-unauthenticated \
+            --port=8080 \
+            --memory=1Gi \
+            --cpu=1 \
+            --max-instances=10 \
+            --min-instances=1 \
+            --concurrency=80 \
+            --timeout=300 \
+            --set-env-vars="NODE_ENV=production,FIREBASE_PROJECT_ID=startsmart-8789e"
+        fi
