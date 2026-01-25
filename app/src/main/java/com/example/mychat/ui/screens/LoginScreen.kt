@@ -16,7 +16,8 @@ fun LoginScreen(
     authState: AuthState,
     onSignIn: (String, String) -> Unit,
     onSignUp: (String, String) -> Unit,
-    onAnonymousSignIn: () -> Unit
+    onAnonymousSignIn: () -> Unit,
+    onGoogleSignIn: () -> Unit
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -102,6 +103,16 @@ fun LoginScreen(
             enabled = authState != AuthState.Loading
         ) {
             Text("Continue as Guest")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = onGoogleSignIn,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = authState != AuthState.Loading
+        ) {
+            Text("Sign in with Google")
         }
 
         // Error message

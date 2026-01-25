@@ -15,7 +15,6 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun MessageInput(
     onSendMessage: (String) -> Unit,
-    enabled: Boolean = true,
     isSending: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -40,14 +39,14 @@ fun MessageInput(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(
                     onSend = {
-                        if (messageText.isNotBlank() && enabled && !isSending) {
+                        if (messageText.isNotBlank() && !isSending) {
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onSendMessage(messageText.trim())
                             messageText = ""
                         }
                     }
                 ),
-                enabled = enabled && !isSending,
+                enabled = !isSending,
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
@@ -66,13 +65,13 @@ fun MessageInput(
             } else {
                 IconButton(
                     onClick = {
-                        if (messageText.isNotBlank() && enabled) {
+                        if (messageText.isNotBlank()) {
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onSendMessage(messageText.trim())
                             messageText = ""
                         }
                     },
-                    enabled = messageText.isNotBlank() && enabled
+                    enabled = messageText.isNotBlank()
                 ) {
                     Text(
                         text = "➤",

@@ -1,8 +1,11 @@
+import com.google.firebase.appdistribution.gradle.firebaseAppDistribution
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("com.google.gms.google-services")
+    id("com.google.firebase.appdistribution")
 }
 
 android {
@@ -19,6 +22,8 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+
     }
 
     signingConfigs {
@@ -49,7 +54,14 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
+}
+
+firebaseAppDistribution {
+    appId = "1:387994411670:android:3898d613d93cf83e9f18b7"
+    releaseNotes = "My Chat App v1.0 - Initial release"
+    groups = "testers"
 }
 
 dependencies {
@@ -83,10 +95,20 @@ dependencies {
     // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth.ktx)
+    implementation(libs.firebase.firestore.ktx)
+
+    // Fragment
+    implementation(libs.androidx.fragment.ktx)
+
+    // Google Sign-In
+    implementation("com.google.android.gms:play-services-auth:20.7.0")
 
     // WebSocket and networking
     implementation(libs.okhttp)
     implementation(libs.gson)
+
+    // Image loading
+    implementation(libs.coil.compose)
 
     // MVVM
     implementation(libs.androidx.lifecycle.viewmodel.compose)

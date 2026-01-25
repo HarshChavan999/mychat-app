@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.mychat.data.model.Message
 import com.example.mychat.data.model.User
-import com.example.mychat.data.websocket.WebSocketManager
 import com.example.mychat.ui.components.MessageBubble
 import com.example.mychat.ui.components.MessageInput
 import kotlinx.coroutines.launch
@@ -22,16 +21,13 @@ fun ChatScreen(
     currentUser: User?,
     chatUser: User?,
     messages: List<Message>,
-    connectionState: WebSocketManager.ConnectionState,
     isLoadingHistory: Boolean = false,
     hasMoreHistory: Boolean = false,
     historyError: String? = null,
     onSendMessage: (String) -> Unit,
     onBack: () -> Unit,
     onLoadMoreHistory: (() -> Unit)? = null,
-    onClearHistoryError: (() -> Unit)? = null,
-    onRefresh: (() -> Unit)? = null,
-    onRetryConnection: (() -> Unit)? = null
+    onClearHistoryError: (() -> Unit)? = null
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -52,21 +48,6 @@ fun ChatScreen(
                         // You can add a back icon here
                         Text("←")
                     }
-                },
-                actions = {
-                    // Connection status indicator
-                    val statusColor = when (connectionState) {
-                        WebSocketManager.ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary
-                        WebSocketManager.ConnectionState.CONNECTING -> MaterialTheme.colorScheme.secondary
-                        WebSocketManager.ConnectionState.ERROR -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-
-                    Surface(
-                        color = statusColor,
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier.size(12.dp)
-                    ) {}
                 }
             )
         }
@@ -194,36 +175,6 @@ fun ChatScreen(
                 }
             }
 
-            // Connection error banner
-            if (connectionState == WebSocketManager.ConnectionState.ERROR) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Connection lost. Messages may not be delivered.",
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        TextButton(
-                            onClick = { onRetryConnection?.invoke() }
-                        ) {
-                            Text(
-                                text = "Retry",
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                }
-            }
-
             // Message input
             MessageInput(
                 onSendMessage = { content ->
@@ -233,7 +184,6 @@ fun ChatScreen(
                         listState.animateScrollToItem(messages.size)
                     }
                 },
-                enabled = connectionState == WebSocketManager.ConnectionState.CONNECTED,
                 modifier = Modifier.fillMaxWidth()
             )
         }

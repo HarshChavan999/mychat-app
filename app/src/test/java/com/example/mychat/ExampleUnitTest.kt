@@ -11,6 +11,8 @@ import com.example.mychat.viewmodel.ChatViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -55,6 +57,8 @@ class ChatViewModelTest {
         whenever(chatRepository.onlineUsers).thenReturn(MutableStateFlow(emptyList()))
         whenever(chatRepository.currentChatUser).thenReturn(MutableStateFlow(null))
         whenever(webSocketManager.connectionState).thenReturn(MutableStateFlow(WebSocketManager.ConnectionState.DISCONNECTED))
+        whenever(webSocketManager.historyResponse).thenReturn(MutableSharedFlow())
+        whenever(webSocketManager.errorReceived).thenReturn(MutableSharedFlow())
 
         viewModel = ChatViewModel(chatRepository, webSocketManager)
     }

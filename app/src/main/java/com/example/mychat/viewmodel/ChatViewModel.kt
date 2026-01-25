@@ -5,15 +5,13 @@ import androidx.lifecycle.viewModelScope
 import com.example.mychat.data.model.Message
 import com.example.mychat.data.model.User
 import com.example.mychat.data.repository.ChatRepository
-import com.example.mychat.data.websocket.WebSocketManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 class ChatViewModel(
-    private val chatRepository: ChatRepository,
-    private val webSocketManager: WebSocketManager
+    private val chatRepository: ChatRepository
 ) : ViewModel() {
 
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
@@ -27,9 +25,6 @@ class ChatViewModel(
 
     private val _currentChatUser = MutableStateFlow<User?>(null)
     val currentChatUser: StateFlow<User?> = _currentChatUser
-
-    private val _connectionState = MutableStateFlow<WebSocketManager.ConnectionState>(WebSocketManager.ConnectionState.DISCONNECTED)
-    val connectionState: StateFlow<WebSocketManager.ConnectionState> = _connectionState
 
     // History loading states
     private val _isLoadingHistory = MutableStateFlow(false)
@@ -63,29 +58,6 @@ class ChatViewModel(
         viewModelScope.launch {
             chatRepository.currentChatUser.collect { user ->
                 _currentChatUser.value = user
-            }
-        }
-        viewModelScope.launch {
-            webSocketManager.connectionState.collect { state ->
-                _connectionState.value = state
-            }
-        }
-
-        // Listen to history responses
-        viewModelScope.launch {
-            webSocketManager.historyResponse.collect { historyResponse ->
-                handleHistoryResponse(
-                    historyResponse.withUserId,
-                    historyResponse.messages,
-                    historyResponse.hasMore
-                )
-            }
-        }
-
-        // Listen to errors
-        viewModelScope.launch {
-            webSocketManager.errorReceived.collect { error ->
-                handleHistoryError(error)
             }
         }
     }
@@ -137,38 +109,22 @@ class ChatViewModel(
         _isLoadingHistory.value = true
         _historyError.value = null
 
-        // Use oldestMessageTimestamp for pagination, null for initial load
-        webSocketManager.sendHistoryRequest(
-            withUserId = currentUser.id,
-            limit = 20, // Load 20 messages at a time
-            beforeTimestamp = oldestMessageTimestamp
-        )
+        viewModelScope.launch {
+            try {
+                chatRepository.loadMessageHistory(currentUser.id)
+                _isLoadingHistory.value = false
+                // For now, assume we have more history available
+                _hasMoreHistory.value = true
+            } catch (e: Exception) {
+                _isLoadingHistory.value = false
+                _historyError.value = e.message ?: "Failed to load chat history"
+            }
+        }
     }
 
     fun loadMoreHistory() {
         if (!_hasMoreHistory.value || _isLoadingHistory.value) return
         loadChatHistory()
-    }
-
-    private fun handleHistoryResponse(withUserId: String, historyMessages: List<Message>, hasMore: Boolean) {
-        _isLoadingHistory.value = false
-        _hasMoreHistory.value = hasMore
-
-        if (historyMessages.isNotEmpty()) {
-            // Update oldest message timestamp for pagination
-            val oldestInResponse = historyMessages.minByOrNull { it.timestamp }?.timestamp
-            if (oldestMessageTimestamp == null || (oldestInResponse != null && oldestInResponse < oldestMessageTimestamp!!)) {
-                oldestMessageTimestamp = oldestInResponse
-            }
-
-            // Add history messages to repository (they will be merged with real-time messages)
-            chatRepository.addHistoryMessages(historyMessages)
-        }
-    }
-
-    private fun handleHistoryError(error: String) {
-        _isLoadingHistory.value = false
-        _historyError.value = error
     }
 
     fun clearHistoryError() {
@@ -188,6 +144,6 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        webSocketManager.cleanup()
+        // No cleanup needed for Firestore
     }
 }

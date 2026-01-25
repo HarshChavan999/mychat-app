@@ -1,6 +1,7 @@
 package com.example.mychat.data.websocket
 
 import android.util.Log
+import com.example.mychat.BuildConfig
 import com.example.mychat.data.model.*
 import com.google.gson.Gson
 import kotlinx.coroutines.*
@@ -12,8 +13,7 @@ import okhttp3.*
 import java.util.concurrent.TimeUnit
 
 class WebSocketManager(
-    private val serverUrl: String = "wss://chat-backend-215828472999.us-central1.run.app", // Production Cloud Run URL
-    private val networkConnectivityManager: NetworkConnectivityManager? = null
+    private val serverUrl: String = "wss://travel-agency-backend-j6kdth6uzq-el.a.run.app/api/chat/websocket" // TravelAgency backend URL
 ) {
     private val TAG = "WebSocketManager"
     private val gson = Gson()
@@ -43,26 +43,16 @@ class WebSocketManager(
     private val _historyResponse = MutableSharedFlow<HistoryResponsePayload>()
     val historyResponse: SharedFlow<HistoryResponsePayload> = _historyResponse
 
+    private val _syncResponse = MutableSharedFlow<SyncResponsePayload>()
+    val syncResponse: SharedFlow<SyncResponsePayload> = _syncResponse
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Ping/Pong for connection health
     private var pingJob: Job? = null
 
     init {
-        // Listen to network connectivity changes for auto-reconnection
-        networkConnectivityManager?.let { manager ->
-            scope.launch {
-                manager.isNetworkAvailable.collect { isAvailable ->
-                    if (isAvailable && _connectionState.value == ConnectionState.DISCONNECTED) {
-                        Log.d(TAG, "Network became available, attempting to reconnect WebSocket")
-                        connect()
-                    } else if (!isAvailable && _connectionState.value == ConnectionState.CONNECTED) {
-                        Log.d(TAG, "Network lost, disconnecting WebSocket")
-                        disconnect()
-                    }
-                }
-            }
-        }
+        // No auto-connection logic - connections only happen after explicit authentication
     }
 
     enum class ConnectionState {
@@ -136,6 +126,15 @@ class WebSocketManager(
         sendMessage(message)
     }
 
+    fun sendSyncRequest(lastSyncTimestamp: Long, limit: Int? = null) {
+        val message = WebSocketMessage(
+            type = MessageType.SYNC_REQUEST,
+            payload = SyncRequestPayload(lastSyncTimestamp, limit),
+            timestamp = System.currentTimeMillis()
+        )
+        sendMessage(message)
+    }
+
     private fun sendMessage(message: WebSocketMessage) {
         if (_connectionState.value != ConnectionState.CONNECTED) {
             Log.w(TAG, "Cannot send message: not connected")
@@ -198,6 +197,11 @@ class WebSocketManager(
                     scope.launch { _historyResponse.emit(historyResponse) }
                     Log.d(TAG, "History response received for conversation with ${historyResponse.withUserId}: ${historyResponse.messages.size} messages")
                 }
+                MessageType.SYNC_RESPONSE -> {
+                    val syncResponse = gson.fromJson(gson.toJson(message.payload), SyncResponsePayload::class.java)
+                    scope.launch { _syncResponse.emit(syncResponse) }
+                    Log.d(TAG, "Sync response received: ${syncResponse.messages.size} messages, syncTimestamp: ${syncResponse.syncTimestamp}")
+                }
                 else -> {
                     Log.w(TAG, "Unknown message type: ${message.type}")
                 }
@@ -240,14 +244,8 @@ class WebSocketManager(
             _connectionState.value = ConnectionState.ERROR
             pingJob?.cancel()
 
-            // Auto-reconnect after delay
-            scope.launch {
-                delay(5000)
-                if (_connectionState.value == ConnectionState.ERROR) {
-                    Log.d(TAG, "Attempting to reconnect...")
-                    connect()
-                }
-            }
+            // Note: Removed auto-reconnection logic
+            // Reconnection should only happen through explicit authentication
         }
     }
 

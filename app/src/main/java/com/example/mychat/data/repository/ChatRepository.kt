@@ -1,10 +1,12 @@
 package com.example.mychat.data.repository
 
 import com.example.mychat.data.model.Message
-import com.example.mychat.data.model.MessageResponse
 import com.example.mychat.data.model.MessageStatus
 import com.example.mychat.data.model.User
-import com.example.mychat.data.websocket.WebSocketManager
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -12,10 +14,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import android.util.Log
 
 class ChatRepository(
-    private val webSocketManager: WebSocketManager,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val firebaseAuth: FirebaseAuth = FirebaseAuth.getInstance(),
+    private val firestore: FirebaseFirestore = FirebaseFirestore.getInstance()
 ) {
 
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
@@ -27,121 +32,168 @@ class ChatRepository(
     private val _currentChatUser = MutableStateFlow<User?>(null)
     val currentChatUser: Flow<User?> = _currentChatUser.asStateFlow()
 
-    // Message queue for offline messages
-    private val _messageQueue = MutableStateFlow<List<QueuedMessage>>(emptyList())
-    val messageQueue: Flow<List<QueuedMessage>> = _messageQueue.asStateFlow()
-
-    // Data class for queued messages
-    data class QueuedMessage(
-        val message: Message,
-        val timestamp: Long = System.currentTimeMillis()
-    )
-
     // Combined flow for messages with specific user
     val chatMessages: Flow<List<Message>> = combine(messages, currentChatUser) { messages, currentUser ->
+        android.util.Log.d("ChatRepository", "Combining messages flow: ${messages.size} total messages, current user: ${currentUser?.id}")
         if (currentUser != null) {
-            messages.filter { it.from == currentUser.id || it.to == currentUser.id }
+            val filteredMessages = messages.filter { it.from == currentUser.id || it.to == currentUser.id }
+            android.util.Log.d("ChatRepository", "Filtered messages for user ${currentUser.id}: ${filteredMessages.size}")
+            filteredMessages
         } else {
+            android.util.Log.d("ChatRepository", "No current user set, returning empty list")
             emptyList()
         }
     }
 
+    private var chatMessagesListener: ListenerRegistration? = null
+
     init {
-        // Listen to WebSocket messages
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            webSocketManager.messageReceived.collect { messageResponse ->
-                handleIncomingMessage(messageResponse)
-            }
-        }
-
-        // Listen to auth responses
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            webSocketManager.authResponse.collect { authResponse ->
-                if (authResponse.success) {
-                    // User authenticated successfully
-                    // Could update online users here if server provides that info
-                }
-            }
-        }
-
-        // Listen to ACK responses to update message status
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            webSocketManager.ackReceived.collect { messageId ->
-                markMessageAsDelivered(messageId)
-                // Remove from queue if it was queued
-                removeFromQueue(messageId)
-            }
-        }
-
-        // Listen to connection state changes to process queued messages
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            webSocketManager.connectionState.collect { state ->
-                if (state == WebSocketManager.ConnectionState.CONNECTED) {
-                    processMessageQueue()
-                }
+        // Listen to authentication state changes
+        firebaseAuth.addAuthStateListener { auth ->
+            if (auth.currentUser != null) {
+                setupMessageListener()
+            } else {
+                cleanupListeners()
             }
         }
     }
 
-    private fun handleIncomingMessage(messageResponse: MessageResponse) {
-        val message = Message(
-            id = messageResponse.id,
-            from = messageResponse.from,
-            to = getCurrentUserId() ?: "", // This should be set properly
-            content = messageResponse.content,
-            timestamp = messageResponse.timestamp,
-            status = MessageStatus.DELIVERED
-        )
+    private fun setupMessageListener() {
+        val currentUser = firebaseAuth.currentUser ?: return
+        val userId = currentUser.uid
 
-        // Add message to list
-        val currentMessages = _messages.value.toMutableList()
-        currentMessages.add(message)
-        _messages.value = currentMessages
+        // Listen to messages for the current chat user only
+        _currentChatUser.value?.let { currentChatUser ->
+            val otherUserId = currentChatUser.id
 
-        // Send ACK back to server
-        webSocketManager.sendAck(messageResponse.id)
+            // Listen to messages between current user and the selected chat user
+            val chatMessagesListener = firestore.collection("messages")
+                .whereIn("sender", listOf(userId, otherUserId))
+                .whereIn("receiverId", listOf(userId, otherUserId))
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        android.util.Log.e("ChatRepository", "Error listening to chat messages: ${error.message}")
+                        return@addSnapshotListener
+                    }
+
+                    snapshot?.let { querySnapshot ->
+                        val messages = mutableListOf<Message>()
+                        for (document in querySnapshot.documents) {
+                            val message = documentToMessage(document)
+                            if (message != null) {
+                                messages.add(message)
+                            }
+                        }
+
+                        // Update messages list, avoiding duplicates
+                        val currentMessages = _messages.value.toMutableList()
+                        val existingIds = currentMessages.map { it.id }.toSet()
+                        val newMessages = messages.filter { it.id !in existingIds }
+
+                        currentMessages.addAll(newMessages)
+                        _messages.value = currentMessages.sortedBy { it.timestamp }
+                    }
+                }
+
+            // Store the listener
+            this.chatMessagesListener = chatMessagesListener
+        }
+    }
+
+    private fun cleanupListeners() {
+        chatMessagesListener?.remove()
+        chatMessagesListener = null
+        _messages.value = emptyList()
+    }
+
+    private fun documentToMessage(document: com.google.firebase.firestore.DocumentSnapshot): Message? {
+        return try {
+            val data = document.data ?: return null
+            val message = Message(
+                id = document.id,
+                from = data["sender"] as? String ?: "",
+                to = data["receiverId"] as? String ?: "",
+                content = data["text"] as? String ?: "",
+                timestamp = (data["timestamp"] as? Long) ?: 0L,
+                status = MessageStatus.SENT // messages collection doesn't have status field
+            )
+            
+            // Debug logging
+            android.util.Log.d("ChatRepository", "Loaded message: ${message.id} from ${message.from} to ${message.to} at ${message.timestamp}")
+            
+            message
+        } catch (e: Exception) {
+            android.util.Log.e("ChatRepository", "Error parsing message document: ${e.message}")
+            null
+        }
     }
 
     fun connect() {
-        webSocketManager.connect()
+        // Firestore is always connected, no explicit connect needed
     }
 
     fun disconnect() {
-        webSocketManager.disconnect()
+        cleanupListeners()
     }
 
     suspend fun authenticate(token: String) {
-        webSocketManager.sendAuth(token)
+        // Firebase Auth handles authentication separately
+        // This method can be used if you need custom auth flow
     }
 
     fun sendMessage(toUserId: String, content: String) {
-        // Create local message first
-        val message = Message(
-            id = generateMessageId(),
-            from = getCurrentUserId() ?: "",
-            to = toUserId,
-            content = content,
-            timestamp = System.currentTimeMillis(),
-            status = MessageStatus.SENT
-        )
+        val currentUser = firebaseAuth.currentUser ?: return
+        val fromUserId = currentUser.uid
 
-        // Add to local messages
-        val currentMessages = _messages.value.toMutableList()
-        currentMessages.add(message)
-        _messages.value = currentMessages
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val messageId = generateMessageId()
+                val timestamp = System.currentTimeMillis()
 
-        // Check if WebSocket is connected
-        if (webSocketManager.connectionState.value == WebSocketManager.ConnectionState.CONNECTED) {
-            // Send via WebSocket immediately
-            webSocketManager.sendMessage(toUserId, content)
-        } else {
-            // Queue message for later sending
-            queueMessage(message)
+                // Create message data for Firestore (messages collection format)
+                val messageData = hashMapOf(
+                    "sender" to fromUserId,
+                    "receiverId" to toUserId,
+                    "text" to content,
+                    "timestamp" to timestamp,
+                    "chatId" to "${fromUserId}_${toUserId}"
+                )
+
+                // Save to Firestore
+                firestore.collection("messages")
+                    .document(messageId)
+                    .set(messageData)
+                    .await()
+
+                // Update local state
+                val message = Message(
+                    id = messageId,
+                    from = fromUserId,
+                    to = toUserId,
+                    content = content,
+                    timestamp = timestamp,
+                    status = MessageStatus.SENT
+                )
+
+                val currentMessages = _messages.value.toMutableList()
+                currentMessages.add(message)
+                _messages.value = currentMessages.sortedBy { it.timestamp }
+
+            } catch (e: Exception) {
+                // Handle error - could queue for retry
+                // For now, just log
+                e.printStackTrace()
+            }
         }
     }
 
     fun setCurrentChatUser(user: User) {
+        android.util.Log.d("ChatRepository", "Setting current chat user: ${user.id} (${user.displayName})")
         _currentChatUser.value = user
+        
+        // Clean up existing listener and set up new one for this user
+        cleanupListeners()
+        setupMessageListener()
     }
 
     fun clearCurrentChatUser() {
@@ -160,6 +212,19 @@ class ChatRepository(
             currentMessages[index] = updatedMessage
             _messages.value = currentMessages
         }
+        
+        // Also update in Firestore
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                firestore.collection("chat_messages")
+                    .document(messageId)
+                    .update("status", "delivered")
+                    .await()
+                Log.d("ChatRepository", "Message $messageId marked as delivered in Firestore")
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Failed to update message status in Firestore: ${e.message}")
+            }
+        }
     }
 
     fun getMessagesWithUser(userId: String): List<Message> {
@@ -171,55 +236,44 @@ class ChatRepository(
     }
 
     private fun getCurrentUserId(): String? {
-        // For now, we'll need to handle this differently since currentUser is a Flow
-        // This is a temporary solution - in a real app you'd want to pass the current user
-        // or collect the flow properly
-        return "current-user-id" // TODO: Fix this properly
+        return firebaseAuth.currentUser?.uid
     }
 
     private fun generateMessageId(): String {
         return java.util.UUID.randomUUID().toString()
     }
 
-    private fun queueMessage(message: Message) {
-        val queuedMessage = QueuedMessage(message)
-        val currentQueue = _messageQueue.value.toMutableList()
-        currentQueue.add(queuedMessage)
-        _messageQueue.value = currentQueue
-    }
+    // Load message history for current chat user
+    suspend fun loadMessageHistory(otherUserId: String, limit: Long = 50) {
+        try {
+            val currentUserId = getCurrentUserId() ?: return
 
-    private fun removeFromQueue(messageId: String) {
-        val currentQueue = _messageQueue.value.toMutableList()
-        currentQueue.removeAll { it.message.id == messageId }
-        _messageQueue.value = currentQueue
-    }
+            val query = firestore.collection("messages")
+                .whereIn("sender", listOf(currentUserId, otherUserId))
+                .whereIn("receiverId", listOf(currentUserId, otherUserId))
+                .orderBy("timestamp", Query.Direction.DESCENDING)
+                .limit(limit)
+                .get()
+                .await()
 
-    private fun processMessageQueue() {
-        val currentQueue = _messageQueue.value
-        if (currentQueue.isNotEmpty()) {
-            // Send all queued messages
-            currentQueue.forEach { queuedMessage ->
-                webSocketManager.sendMessage(queuedMessage.message.to, queuedMessage.message.content)
+            val historyMessages = mutableListOf<Message>()
+            for (document in query.documents) {
+                val message = documentToMessage(document)
+                if (message != null) {
+                    historyMessages.add(message)
+                }
             }
-            // Clear the queue after sending
-            _messageQueue.value = emptyList()
+
+            // Add to existing messages, avoiding duplicates
+            val currentMessages = _messages.value.toMutableList()
+            val existingIds = currentMessages.map { it.id }.toSet()
+            val newMessages = historyMessages.filter { it.id !in existingIds }
+
+            currentMessages.addAll(newMessages)
+            _messages.value = currentMessages.sortedBy { it.timestamp }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-    }
-
-    // History message handling
-    fun addHistoryMessages(historyMessages: List<Message>) {
-        val currentMessages = _messages.value.toMutableList()
-
-        // Filter out any history messages that are already in the list (by ID)
-        val existingMessageIds = currentMessages.map { it.id }.toSet()
-        val newHistoryMessages = historyMessages.filter { it.id !in existingMessageIds }
-
-        // Add history messages to the beginning (they are older messages)
-        currentMessages.addAll(0, newHistoryMessages)
-
-        // Sort messages by timestamp to ensure proper ordering
-        currentMessages.sortBy { it.timestamp }
-
-        _messages.value = currentMessages
     }
 }

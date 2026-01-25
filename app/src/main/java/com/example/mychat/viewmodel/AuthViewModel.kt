@@ -1,10 +1,13 @@
 package com.example.mychat.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mychat.data.model.User
 import com.example.mychat.data.repository.AuthRepository
 import com.example.mychat.data.repository.AuthState
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -28,14 +31,19 @@ class AuthViewModel(private val authRepository: AuthRepository) : ViewModel() {
         viewModelScope.launch {
             authRepository.currentUser.collect { user ->
                 _currentUser.value = user
+                // Emit auth success when we have a valid user (regardless of auth state)
+                // This handles both Firebase auth state changes and anonymous sign-in
+                if (user != null) {
+                    _authSuccess.emit(user)
+                }
             }
         }
         viewModelScope.launch {
             authRepository.authState.collect { state ->
                 _authState.value = state
-                // Emit auth success when authentication completes successfully
-                if (state is AuthState.Success && _currentUser.value != null) {
-                    _authSuccess.emit(_currentUser.value!!)
+                // For error states, we don't emit success
+                if (state is AuthState.Error) {
+                    // Clear any pending success emission
                 }
             }
         }
@@ -69,5 +77,20 @@ class AuthViewModel(private val authRepository: AuthRepository) : ViewModel() {
 
     suspend fun getIdTokenAsync(): String? {
         return authRepository.getIdTokenAsync()
+    }
+
+    fun getGoogleSignInClient(context: Context): GoogleSignInClient {
+        return authRepository.getGoogleSignInClient(context)
+    }
+
+    fun signInWithGoogle(account: GoogleSignInAccount) {
+        android.util.Log.d("AuthViewModel", "signInWithGoogle called with account: ${account.email}")
+        viewModelScope.launch {
+            val result = authRepository.signInWithGoogle(account)
+            android.util.Log.d("AuthViewModel", "signInWithGoogle result: ${result.isSuccess}")
+            if (result.isFailure) {
+                android.util.Log.e("AuthViewModel", "signInWithGoogle failed: ${result.exceptionOrNull()?.message}")
+            }
+        }
     }
 }

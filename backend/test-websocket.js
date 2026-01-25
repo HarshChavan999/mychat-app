@@ -1,16 +1,15 @@
 // Simple WebSocket test script
 const WebSocket = require('ws');
 
-console.log('Testing WebSocket connection to backend...');
-console.log('Make sure the backend server is running on port 8080');
+console.log('Testing WebSocket connection to remote backend...');
 console.log('');
 
 console.log('Testing WebSocket server...');
 
 // Test health endpoint first
-const http = require('http');
+const https = require('https');
 
-http.get('http://localhost:8080/health', (res) => {
+https.get('https://travel-agency-backend-j6kdth6uzq-el.a.run.app/api/health', (res) => {
   let data = '';
   res.on('data', (chunk) => data += chunk);
   res.on('end', () => {
@@ -19,7 +18,7 @@ http.get('http://localhost:8080/health', (res) => {
 });
 
 // Test WebSocket connection
-const ws = new WebSocket('ws://localhost:8080');
+const ws = new WebSocket('wss://travel-agency-backend-j6kdth6uzq-el.a.run.app/api/chat/websocket');
 
 ws.on('open', function open() {
   console.log('WebSocket connection opened');
@@ -36,34 +35,48 @@ ws.on('open', function open() {
 });
 
 ws.on('message', function message(data) {
-  const response = JSON.parse(data.toString());
-  console.log('Received:', response);
+  try {
+    const response = JSON.parse(data.toString());
+    console.log('📨 Received:', JSON.stringify(response, null, 2));
 
-  if (response.type === 'AUTH' && response.payload.success === false) {
-    console.log('✅ AUTH test passed - correctly rejected invalid token');
-  }
+    if (response.type === 'AUTH' && response.payload && response.payload.success === false) {
+      console.log('✅ AUTH test passed - correctly rejected invalid token');
+    } else if (response.type === 'ERROR') {
+      console.log('❌ Server error:', response.payload.error);
+    } else if (response.type === 'PONG') {
+      console.log('✅ PING test passed - received PONG');
+    }
 
-  // Test PING
-  if (response.type !== 'PONG') {
-    const pingMessage = {
-      type: 'PING',
-      timestamp: Date.now()
-    };
-    console.log('Sending PING message...');
-    ws.send(JSON.stringify(pingMessage));
+    // Test PING after receiving AUTH response
+    if (response.type === 'AUTH') {
+      setTimeout(() => {
+        const pingMessage = {
+          type: 'PING',
+          timestamp: Date.now()
+        };
+        console.log('🏓 Sending PING message...');
+        ws.send(JSON.stringify(pingMessage));
+      }, 1000);
+    }
+  } catch (error) {
+    console.error('❌ Error parsing message:', error);
+    console.log('Raw message:', data.toString());
   }
 });
 
 ws.on('close', function close(code, reason) {
-  console.log('WebSocket connection closed:', code, reason.toString());
+  console.log('🔌 WebSocket connection closed');
+  console.log('   Code:', code);
+  console.log('   Reason:', reason.toString());
   console.log('✅ WebSocket test completed');
 });
 
 ws.on('error', function error(err) {
-  console.error('WebSocket error:', err);
+  console.error('🚨 WebSocket error:', err);
 });
 
-// Close after 5 seconds
+// Close after 10 seconds to allow for message exchange
 setTimeout(() => {
+  console.log('⏰ Timeout reached, closing connection...');
   ws.close();
-}, 5000);
+}, 10000);

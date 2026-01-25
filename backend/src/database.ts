@@ -60,6 +60,7 @@ export class DatabaseService {
     try {
       await this.createTables();
       await this.createIndexes();
+      await this.seedDemoUser();
       this.isInitialized = true;
       console.log('Database initialized successfully');
     } catch (error) {
@@ -146,6 +147,29 @@ export class DatabaseService {
       console.log('Database indexes created successfully');
     } finally {
       client.release();
+    }
+  }
+
+  // Seed demo user for testing
+  private async seedDemoUser(): Promise<void> {
+    try {
+      // Check if demo user already exists
+      const existingUser = await this.query('SELECT id FROM users WHERE id = $1', ['demo-user-123']);
+
+      if (existingUser.rows.length === 0) {
+        // Create demo user
+        await this.query(`
+          INSERT INTO users (id, display_name, is_anonymous, is_online, bio)
+          VALUES ($1, $2, $3, $4, $5)
+        `, ['demo-user-123', 'Demo Bot', true, false, 'A demo user that echoes messages back to you.']);
+
+        console.log('Demo user seeded successfully');
+      } else {
+        console.log('Demo user already exists');
+      }
+    } catch (error) {
+      console.error('Error seeding demo user:', error);
+      throw error;
     }
   }
 
